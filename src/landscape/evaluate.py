@@ -1,10 +1,12 @@
 """Loss of a model at arbitrary points in weight space."""
 
+import warnings
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
 
 import torch
 from torch import nn
+from torch.func import functional_call, vmap
 
 LossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
@@ -74,11 +76,41 @@ class Evaluator:
     def loss(self, theta: torch.Tensor) -> float:
         return float(self.losses(theta.unsqueeze(0))[0])
 
-    def losses(self, thetas: torch.Tensor) -> torch.Tensor:
-        """Loss at each row of `thetas`, shape (points, n_weights)."""
-        out = torch.empty(len(thetas), dtype=torch.float64)
+    def _losses_vmapped(self, thetas: torch.Tensor) -> torch.Tensor:
+        names = [n for n, _ in self.model.named_parameters()]
+        shapes = [p.shape for p in self.params]
+        sizes = [p.numel() for p in self.params]
+        buffers = {n: b.detach() for n, b in self.model.named_buffers()}
+
+        def one(theta, x, y):
+            params = {n: t.view(s) for n, t, s in zip(names, theta.split(sizes), shapes)}
+            return self.loss_fn(functional_call(self.model, (params, buffers), (x,)), y)
+
+        batched = vmap(one, in_dims=(0, None, None))
+        total = torch.zeros(len(thetas), dtype=torch.float64)
+        for x, y in self.batches:
+            total += batched(thetas, x, y).double().cpu() * len(y)
+        return total / self.n
+
+    def losses(self, thetas: torch.Tensor, vectorize: bool = True) -> torch.Tensor:
+        """Loss at each row of `thetas`, shape (points, n_weights).
+
+        With vectorize=True all rows go through the model at once via vmap, so
+        the cost in memory is (points x activations); pass smaller blocks for
+        big models. A loss or model that vmap cannot trace falls back to the
+        plain per-point loop with a warning.
+        """
+        thetas = thetas.to(self.device)
+        if thetas.shape[1] != self.theta0.numel():
+            raise ValueError(f"expected {self.theta0.numel()} weights, got {thetas.shape[1]}")
         with self._eval_state():
+            if vectorize:
+                try:
+                    return self._losses_vmapped(thetas)
+                except (RuntimeError, ValueError, TypeError) as err:
+                    warnings.warn(f"vmap failed ({err}); evaluating point by point", RuntimeWarning)
+            out = torch.empty(len(thetas), dtype=torch.float64)
             for i, theta in enumerate(thetas):
-                self._assign(theta.to(self.device))
+                self._assign(theta)
                 out[i] = self._loss_here()
-        return out
+            return out
