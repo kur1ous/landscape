@@ -14,22 +14,20 @@ def plot_curve(curves, labels=None, ax=None, logy=False):
         for i, c in enumerate(curves):
             (line,) = ax.plot(c.alphas, c.losses, label=labels[i] if labels else None)
             if c.marks:
-                ax.plot(
-                    c.marks,
-                    np.interp(c.marks, c.alphas, c.losses),
-                    "o",
-                    ms=4.5,
-                    mfc=style.PAPER,
-                    mec=line.get_color(),
-                    mew=1.3,
-                    zorder=3,
-                )
+                ys = np.interp(c.marks, c.alphas, c.losses)
+                ax.plot(c.marks, ys, "o", ms=4.5, mfc=style.PAPER, mec=line.get_color(), mew=1.3, zorder=3)
+                for x, y, text in zip(c.marks, ys, c.mark_labels):
+                    ax.annotate(
+                        text, (x, y), (0, 8), textcoords="offset points",
+                        ha="center", fontsize=7.5, color=style.MUTED,
+                    )
         ax.set_xlabel(curves[0].xlabel)
         ax.set_ylabel("loss")
         if logy:
             ax.set_yscale("log")
         else:
-            ax.set_ylim(bottom=0)
+            top = ax.get_ylim()[1]
+            ax.set_ylim(-0.03 * top, top)  # keep a minimum at zero off the axis line
         ax.margins(x=0.02)
         if labels:
             ax.legend(loc="upper center")
@@ -37,9 +35,16 @@ def plot_curve(curves, labels=None, ax=None, logy=False):
 
 
 def _nice_levels(vmin, vmax, n):
-    # denser near the minimum, where the interesting structure is
-    raw = vmin + (vmax - vmin) * np.linspace(0, 1, n) ** 2
-    return np.unique([float(f"{v:.2g}") for v in raw])
+    # log-spaced above the minimum: basins are steep, so linear levels
+    # would put one line at the bottom and a crowd at the rim
+    raw = vmin + (vmax - vmin) * np.geomspace(0.01, 1, n)
+    return np.concatenate([[vmin], np.unique([float(f"{v:.2g}") for v in raw])])
+
+
+def _label_colors(levels, cmap, vmin, vmax):
+    rgb = cmap((np.asarray(levels) - vmin) / (vmax - vmin))[:, :3]
+    dark = rgb @ np.array([0.2126, 0.7152, 0.0722]) < 0.45
+    return [style.PAPER if d else style.INK for d in dark]
 
 
 def plot_surface(surface, levels=10, vmax=None, ax=None):
@@ -56,10 +61,15 @@ def plot_surface(surface, levels=10, vmax=None, ax=None):
         if ax is None:
             _, ax = plt.subplots(figsize=(4.6, 4.0))
         ax.contourf(surface.alphas, surface.betas, z, levels=lv, cmap=style.CMAP, extend="max")
+        line_levels = lv[1:]  # no line at the exact minimum
         lines = ax.contour(
-            surface.alphas, surface.betas, z, levels=lv, colors=style.INK, linewidths=0.45, alpha=0.7
+            surface.alphas, surface.betas, z, levels=line_levels,
+            colors=style.INK, linewidths=0.45, alpha=0.7,
         )
-        ax.clabel(lines, fmt="%g", fontsize=6.5, inline_spacing=4)
+        ax.clabel(
+            lines, fmt="%g", fontsize=6.5, inline_spacing=3,
+            colors=_label_colors(line_levels, style.CMAP, vmin, vmax),
+        )
         ax.plot(0, 0, "o", ms=5, mfc=style.ACCENT, mec=style.PAPER, mew=1.0, zorder=4)
         ax.set_xlabel("α")
         ax.set_ylabel("β")

@@ -87,3 +87,10 @@ def test_plot_curve_draws_and_saves(tmp_path):
     assert len(ax.lines) == 4  # a curve and its marker, twice
     ax.figure.savefig(tmp_path / "c.png")
     assert (tmp_path / "c.png").stat().st_size > 1000
+
+
+def test_checkpoint_curve_labels_both_ends():
+    model, other = mlp(0), mlp(1)
+    curve = between_checkpoints(model, CE, data(), model.state_dict(), other.state_dict(), steps=5)
+    ax = plot_curve(curve)
+    assert [t.get_text() for t in ax.texts] == ["start", "end"]

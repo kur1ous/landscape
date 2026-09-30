@@ -15,6 +15,7 @@ class Curve:
     alphas: np.ndarray
     losses: np.ndarray
     marks: tuple[float, ...] = (0.0,)  # alphas that correspond to real weights
+    mark_labels: tuple[str, ...] = ()
     xlabel: str = "α"
 
 
@@ -65,5 +66,6 @@ def between_checkpoints(
         alphas.squeeze(1).numpy(),
         ev.losses(thetas).numpy(),
         marks=(0.0, 1.0),
+        mark_labels=("start", "end"),
         xlabel="interpolation coefficient α",
     )
