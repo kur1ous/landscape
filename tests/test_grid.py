@@ -56,6 +56,23 @@ def test_chunk_size_does_not_matter():
     np.testing.assert_allclose(a.losses, b.losses, rtol=1e-5, atol=1e-6)
 
 
+@pytest.mark.parametrize("chunk", [0, -1, -64])
+def test_nonpositive_chunk_rejected_before_reading_loader(chunk):
+    model = mlp()
+    dx, dy = dirs(model)
+    batches_read = []
+
+    def loader():
+        for batch in data():
+            batches_read.append(batch)
+            yield batch
+
+    with pytest.raises(ValueError, match="chunk must be at least 1"):
+        plane_slice(model, CE, loader(), dx, dy, steps=3, chunk=chunk)
+
+    assert batches_read == []
+
+
 def test_untraceable_loss_falls_back_with_warning():
     model, loader = mlp(), data()
     dx, dy = dirs(model)

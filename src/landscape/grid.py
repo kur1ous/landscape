@@ -32,10 +32,13 @@ def plane_slice(
 
     theta is the model's current weights. Points are evaluated `chunk` at a
     time so the (points x n_weights) matrix never has to exist in full.
+    `chunk` must be at least 1.
     """
     nx, ny = (steps, steps) if isinstance(steps, int) else steps
     if min(nx, ny) < 2:
         raise ValueError("steps must be at least 2")
+    if chunk < 1:
+        raise ValueError("chunk must be at least 1")
     ev = Evaluator(model, loss_fn, loader)
     alphas = np.linspace(*xspan, nx)
     betas = np.linspace(*yspan, ny)
