@@ -1,5 +1,5 @@
 from . import style
-from .directions import normalize_direction, random_direction
+from .directions import check_direction, normalize_direction, random_direction
 from .evaluate import Evaluator
 from .grid import Surface, plane_slice
 from .interpolate import Curve, along_direction, between_checkpoints
@@ -13,6 +13,7 @@ __all__ = [
     "Surface",
     "along_direction",
     "between_checkpoints",
+    "check_direction",
     "normalize_direction",
     "plane_slice",
     "plot_curve",

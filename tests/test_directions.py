@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch import nn
 
-from landscape import normalize_direction, random_direction
+from landscape import along_direction, check_direction, normalize_direction, plane_slice, random_direction
 
 
 def conv_bn_net():
@@ -81,3 +81,58 @@ def test_zero_filter_stays_zero():
 def test_mismatched_shapes_rejected():
     with pytest.raises(ValueError):
         normalize_direction([torch.zeros(2, 2)], [torch.zeros(3, 2)])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_check_direction_accepts_matching_parameters(dtype):
+    model = conv_bn_net().to(dtype=dtype)
+    direction = random_direction(model, seed=1)
+    assert check_direction(model, tuple(direction)) is None
+
+
+@pytest.mark.parametrize(
+    "problem, message",
+    [
+        ("missing", r"missing parameter '0.bias' at index 1: expected 2 tensors, got 1"),
+        ("extra", r"extra tensor at index 2 with no matching parameter: expected 2 tensors, got 3"),
+        ("shape", r"parameter '0.weight' has shape \(1, 4\); expected \(2, 2\)"),
+        ("dtype", r"parameter '0.bias' has dtype torch.float64; expected torch.float32"),
+    ],
+)
+@pytest.mark.parametrize("entrypoint", ["check", "curve", "plane_x", "plane_y"])
+def test_bad_directions_rejected_before_reading_loader(problem, message, entrypoint):
+    model = nn.Sequential(nn.Linear(2, 2))
+    valid = random_direction(model, seed=0)
+    direction = list(valid)
+    if problem == "missing":
+        direction.pop()
+    elif problem == "extra":
+        direction.append(torch.empty(0))
+    elif problem == "shape":
+        direction[0] = direction[0].reshape(1, 4)
+    else:
+        direction[1] = direction[1].double()
+
+    batches_read = []
+
+    def loader():
+        batches_read.append(True)
+        yield torch.ones(2, 2), torch.zeros(2, 2)
+
+    with pytest.raises(ValueError, match=message):
+        if entrypoint == "check":
+            check_direction(model, direction)
+        elif entrypoint == "curve":
+            along_direction(model, nn.MSELoss(), loader(), direction, steps=2)
+        else:
+            dx, dy = (direction, valid) if entrypoint == "plane_x" else (valid, direction)
+            plane_slice(model, nn.MSELoss(), loader(), dx, dy, steps=2)
+
+    assert batches_read == []
+
+
+def test_check_direction_names_first_bad_parameter():
+    model = nn.Sequential(nn.Linear(2, 2))
+    direction = [torch.zeros(4), torch.zeros(3)]
+    with pytest.raises(ValueError, match="parameter '0.weight' has shape"):
+        check_direction(model, direction)

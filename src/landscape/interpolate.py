@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from .directions import check_direction
 from .evaluate import Evaluator, LossFn, flatten
 
 
@@ -34,6 +35,7 @@ def along_direction(
     steps: int = 51,
 ) -> Curve:
     """Loss of theta + alpha * direction, with theta the model's current weights."""
+    check_direction(model, direction)
     ev = Evaluator(model, loss_fn, loader)
     alphas = _alphas(span, steps)
     d = flatten(direction).to(ev.device)

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from .directions import check_direction
 from .evaluate import Evaluator, LossFn, flatten
 
 
@@ -39,6 +40,8 @@ def plane_slice(
         raise ValueError("steps must be at least 2")
     if chunk < 1:
         raise ValueError("chunk must be at least 1")
+    check_direction(model, dx)
+    check_direction(model, dy)
     ev = Evaluator(model, loss_fn, loader)
     alphas = np.linspace(*xspan, nx)
     betas = np.linspace(*yspan, ny)

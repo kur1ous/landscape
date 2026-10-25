@@ -15,6 +15,32 @@ from torch import nn
 EPS = 1e-10
 
 
+def check_direction(model: nn.Module, direction: Sequence[torch.Tensor]) -> None:
+    params = list(model.named_parameters())
+    for i, (name, param) in enumerate(params):
+        if i >= len(direction):
+            raise ValueError(
+                f"direction is missing parameter {name!r} at index {i}: "
+                f"expected {len(params)} tensors, got {len(direction)}"
+            )
+        tensor = direction[i]
+        if tensor.shape != param.shape:
+            raise ValueError(
+                f"direction for parameter {name!r} has shape {tuple(tensor.shape)}; "
+                f"expected {tuple(param.shape)}"
+            )
+        if tensor.dtype != param.dtype:
+            raise ValueError(
+                f"direction for parameter {name!r} has dtype {tensor.dtype}; "
+                f"expected {param.dtype}"
+            )
+    if len(direction) > len(params):
+        raise ValueError(
+            f"direction has an extra tensor at index {len(params)} with no matching parameter: "
+            f"expected {len(params)} tensors, got {len(direction)}"
+        )
+
+
 def normalize_direction(
     direction: Sequence[torch.Tensor],
     weights: Sequence[torch.Tensor],
