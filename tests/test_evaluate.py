@@ -108,3 +108,33 @@ def test_losses_with_tied_or_frozen_parameters(parameter_case, vectorize):
             torch.testing.assert_close(p.grad, grad, rtol=0, atol=0)
     if isinstance(model, TiedModel):
         assert model.embedding.weight is model.output.weight
+
+
+@pytest.mark.parametrize("vectorize", [True, False])
+def test_empty_batches_do_not_poison_mean_loss(vectorize):
+    model = nn.Linear(1, 1, bias=False)
+    x = torch.tensor([[1.], [2.], [3.]])
+    y = torch.zeros_like(x)
+    empty = (x[:0], y[:0])
+    batches = [empty, (x[:1], y[:1]), empty, (x[1:], y[1:]), empty]
+
+    def loss_fn(output, target):
+        assert len(target) > 0
+        return F.mse_loss(output, target)
+
+    evaluator = Evaluator(model, loss_fn, (batch for batch in batches))
+    thetas = torch.tensor([[2.], [3.]])
+    expected = torch.tensor([4., 9.], dtype=torch.float64) * (14 / 3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        actual = evaluator.losses(thetas, vectorize=vectorize)
+    assert evaluator.n == 3
+    torch.testing.assert_close(actual, expected)
+
+
+def test_loader_with_only_empty_batches_is_rejected():
+    model = nn.Linear(1, 1)
+    empty = torch.empty(0, 1)
+    loader = ((empty, empty) for _ in range(2))
+    with pytest.raises(ValueError, match="loader yielded no examples"):
+        Evaluator(model, nn.MSELoss(), loader)

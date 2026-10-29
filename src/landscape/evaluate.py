@@ -23,7 +23,8 @@ class Evaluator:
     model is evaluated in eval mode (BatchNorm uses running statistics,
     dropout is off) and is put back exactly as it was afterwards.
 
-    `loss_fn(output, target)` must return a mean over the batch.
+    `loss_fn(output, target)` must return a mean over the batch. Empty batches
+    are skipped; a loader with no examples is rejected.
     """
 
     def __init__(
@@ -40,6 +41,9 @@ class Evaluator:
         self.batches = [(x.to(self.device), y.to(self.device)) for x, y in loader]
         if not self.batches:
             raise ValueError("loader yielded no batches")
+        self.batches = [(x, y) for x, y in self.batches if len(y) > 0]
+        if not self.batches:
+            raise ValueError("loader yielded no examples")
         self.n = sum(len(y) for _, y in self.batches)
         self.theta0 = flatten(self.params)
 
