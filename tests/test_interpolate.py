@@ -69,6 +69,35 @@ def test_between_checkpoints_hits_the_endpoints():
     assert curve.losses[-1] == pytest.approx(loss_at_own_weights(other, loader), rel=1e-6)
 
 
+@pytest.mark.parametrize("checkpoint", ["start", "end"])
+@pytest.mark.parametrize("shape", [(3, 2), (2, 4)])
+def test_checkpoint_parameter_shapes_are_checked(checkpoint, shape):
+    model = nn.Linear(3, 2)
+    states = {label: copy.deepcopy(model.state_dict()) for label in ("start", "end")}
+    states[checkpoint]["weight"] = torch.zeros(shape)
+    loader = [(torch.ones(2, 3), torch.zeros(2, 2))]
+    with pytest.raises(ValueError, match=rf"{checkpoint} checkpoint.*'weight'.*shape.*expected"):
+        between_checkpoints(model, nn.MSELoss(), loader, **states, steps=2)
+
+
+@pytest.mark.parametrize("checkpoint", ["start", "end"])
+@pytest.mark.parametrize("invalid", ["missing", "shape"])
+def test_invalid_checkpoint_is_rejected_before_reading_loader(checkpoint, invalid):
+    model = nn.Linear(3, 2)
+    states = {label: copy.deepcopy(model.state_dict()) for label in ("start", "end")}
+    if invalid == "missing":
+        del states[checkpoint]["bias"]
+    else:
+        states[checkpoint]["bias"] = torch.zeros(1, 2)
+
+    def unread_loader():
+        raise AssertionError("invalid checkpoint consumed the loader")
+        yield
+
+    with pytest.raises(ValueError, match=rf"{checkpoint} checkpoint.*'bias'"):
+        between_checkpoints(model, nn.MSELoss(), unread_loader(), **states, steps=2)
+
+
 def test_wrong_flat_size_rejected():
     ev = Evaluator(mlp(), CE, data())
     with pytest.raises(ValueError):

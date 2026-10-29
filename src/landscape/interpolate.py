@@ -58,8 +58,18 @@ def between_checkpoints(
     stay as they are in `model`, so load the checkpoint you want them from
     before calling.
     """
+    params = list(model.named_parameters())
+    for label, state in (("start", start), ("end", end)):
+        for name, param in params:
+            if name not in state:
+                raise ValueError(f"{label} checkpoint is missing parameter {name!r}")
+            if state[name].shape != param.shape:
+                raise ValueError(
+                    f"{label} checkpoint parameter {name!r} has shape "
+                    f"{tuple(state[name].shape)}; expected {tuple(param.shape)}"
+                )
     ev = Evaluator(model, loss_fn, loader)
-    names = [n for n, _ in model.named_parameters()]
+    names = [n for n, _ in params]
     a = flatten([start[n] for n in names]).to(ev.device)
     b = flatten([end[n] for n in names]).to(ev.device)
     alphas = torch.as_tensor(_alphas(span, steps), dtype=a.dtype)[:, None]
