@@ -6,13 +6,26 @@ from .interpolate import Curve
 
 
 def plot_curve(curves, labels=None, ax=None, logy=False):
-    """Draw one Curve or several on shared axes. Returns the Axes."""
+    """Draw curves with optional metrics on a right axis. Returns the loss Axes."""
     curves = [curves] if isinstance(curves, Curve) else list(curves)
     with style.context():
         if ax is None:
             _, ax = plt.subplots(figsize=(4.6, 3.0))
+        metric_ax = None
         for i, c in enumerate(curves):
             (line,) = ax.plot(c.alphas, c.losses, label=labels[i] if labels else None)
+            if c.metric is not None:
+                if metric_ax is None:
+                    metric_ax = ax.twinx()
+                    metric_ax.set_ylabel("metric", color=style.MUTED)
+                    metric_ax.tick_params(axis="y", colors=style.MUTED)
+                    metric_ax.spines["right"].set_visible(True)
+                    metric_ax.spines["right"].set_color(style.MUTED)
+                    metric_ax.spines["right"].set_linewidth(style.RC["axes.linewidth"])
+                metric_ax.plot(
+                    c.alphas, c.metric, "--", color=style.MUTED,
+                    label=f"{labels[i]} metric" if labels else "metric",
+                )
             if c.marks:
                 ys = np.interp(c.marks, c.alphas, c.losses)
                 ax.plot(c.marks, ys, "o", ms=4.5, mfc=style.PAPER, mec=line.get_color(), mew=1.3, zorder=3)
@@ -30,7 +43,12 @@ def plot_curve(curves, labels=None, ax=None, logy=False):
             ax.set_ylim(-0.03 * top, top)  # keep a minimum at zero off the axis line
         ax.margins(x=0.02)
         if labels:
-            ax.legend(loc="upper center")
+            handles, legend_labels = ax.get_legend_handles_labels()
+            if metric_ax is not None:
+                metric_handles, metric_labels = metric_ax.get_legend_handles_labels()
+                handles += metric_handles
+                legend_labels += metric_labels
+            ax.legend(handles, legend_labels, loc="upper center")
     return ax
 
 

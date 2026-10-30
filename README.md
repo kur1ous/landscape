@@ -51,6 +51,7 @@ ls.plot_curve(curve).figure.savefig("path.png")
   `(N,)` class labels. Slice results store a matching `.metric` array;
   `Evaluator.evaluate(thetas)` returns `(losses, metrics)`. Custom metrics
   must return a scalar tensor with the batch mean; without one, metrics is `None`.
+  `plot_curve` draws metrics as dashed lines on a separate right-hand scale.
 - Between two checkpoints only parameters are interpolated. BatchNorm running
   statistics stay whatever `model` currently holds.
 
