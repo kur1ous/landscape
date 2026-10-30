@@ -40,6 +40,10 @@ ls.plot_curve(curve).figure.savefig("path.png")
 - The loader is read once and held in memory, and the model is evaluated in eval
   mode, so every grid point sees the same data and dropout is off. The model's
   weights and train/eval flags are restored afterwards.
+- Use `ls.subsample(loader, n=1000, seed=7)` for a fixed subset in loader order,
+  or `ls.Evaluator(model, loss_fn, loader, max_examples=1000, seed=7)` to cap
+  evaluation data. Sampling reads the full loader; reproducibility requires
+  the same input order. The helper rejects `n` larger than the dataset.
 - 2D grids are evaluated with `torch.func.vmap` in chunks; if the model or loss
   cannot be vmapped it falls back to a per-point loop with a warning.
 - Between two checkpoints only parameters are interpolated. BatchNorm running

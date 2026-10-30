@@ -1,6 +1,8 @@
 """Loss of a model at arbitrary points in weight space."""
 
+import random
 import warnings
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
 
@@ -15,6 +17,36 @@ def flatten(tensors: Sequence[torch.Tensor]) -> torch.Tensor:
     return torch.cat([t.detach().reshape(-1) for t in tensors])
 
 
+def subsample(
+    loader: Iterable[tuple[torch.Tensor, torch.Tensor]], n: int, seed: int = 0,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Sample exactly n examples without replacement, preserving loader order.
+
+    The seed selects positions in the loader's example stream, independently
+    of batch boundaries. Repeated calls need the same input order and data.
+    Empty batches are omitted; n must be positive and no larger than the data.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise ValueError("n must be a positive integer")
+    batches = list(loader)
+    if any(len(x) != len(y) for x, y in batches):
+        raise ValueError("inputs and targets must have the same batch length")
+    total = sum(len(y) for _, y in batches)
+    if n > total:
+        raise ValueError(f"requested {n} examples, but loader yielded {total}")
+    selected = sorted(random.Random(seed).sample(range(total), n))
+    result = []
+    offset = start = 0
+    for x, y in batches:
+        end = bisect_left(selected, offset + len(y), lo=start)
+        if end > start:
+            indices = [i - offset for i in selected[start:end]]
+            result.append((x[indices], y[indices]))
+        offset += len(y)
+        start = end
+    return result
+
+
 class Evaluator:
     """Evaluates `loss_fn` over a fixed dataset at flat weight vectors.
 
@@ -24,7 +56,8 @@ class Evaluator:
     dropout is off) and is put back exactly as it was afterwards.
 
     `loss_fn(output, target)` must return a mean over the batch. Empty batches
-    are skipped; a loader with no examples is rejected.
+    are skipped; a loader with no examples is rejected. `max_examples` caps
+    the cached dataset using `subsample` and `seed` (default 0).
     """
 
     def __init__(
@@ -33,18 +66,29 @@ class Evaluator:
         loss_fn: LossFn,
         loader: Iterable[tuple[torch.Tensor, torch.Tensor]],
         device: torch.device | str | None = None,
+        *,
+        max_examples: int | None = None,
+        seed: int = 0,
     ):
+        if max_examples is not None and (
+            isinstance(max_examples, bool) or not isinstance(max_examples, int) or max_examples <= 0
+        ):
+            raise ValueError("max_examples must be a positive integer")
         self.model = model
         self.loss_fn = loss_fn
         self.params = list(model.parameters())
         self.device = torch.device(device) if device else self.params[0].device
-        self.batches = [(x.to(self.device), y.to(self.device)) for x, y in loader]
+        self.batches = list(loader)
         if not self.batches:
             raise ValueError("loader yielded no batches")
         self.batches = [(x, y) for x, y in self.batches if len(y) > 0]
         if not self.batches:
             raise ValueError("loader yielded no examples")
         self.n = sum(len(y) for _, y in self.batches)
+        if max_examples is not None:
+            self.batches = subsample(self.batches, min(max_examples, self.n), seed)
+            self.n = min(max_examples, self.n)
+        self.batches = [(x.to(self.device), y.to(self.device)) for x, y in self.batches]
         self.theta0 = flatten(self.params)
 
     @contextmanager

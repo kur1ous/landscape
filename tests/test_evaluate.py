@@ -1,3 +1,4 @@
+import random
 import warnings
 
 import pytest
@@ -5,7 +6,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from landscape import Evaluator, check_direction, random_direction
+from landscape import Evaluator, check_direction, random_direction, subsample
 from landscape.evaluate import flatten
 
 
@@ -138,3 +139,74 @@ def test_loader_with_only_empty_batches_is_rejected():
     loader = ((empty, empty) for _ in range(2))
     with pytest.raises(ValueError, match="loader yielded no examples"):
         Evaluator(model, nn.MSELoss(), loader)
+
+
+def test_subsample_is_seeded_ordered_and_independent_of_batch_boundaries():
+    x = torch.arange(30).reshape(15, 2)
+    y = torch.arange(15)
+    random_state = random.getstate()
+    torch_state = torch.random.get_rng_state().clone()
+
+    def sample(size, seed):
+        batches = ((x[i:i + size], y[i:i + size]) for i in range(0, len(y), size))
+        result = subsample(batches, 7, seed)
+        assert all(0 < len(b) <= size for _, b in result)
+        return torch.cat([a for a, _ in result]), torch.cat([b for _, b in result])
+
+    sampled_x, sampled_y = sample(4, 7)
+    assert len(sampled_y) == len(sampled_y.unique()) == 7
+    assert torch.equal(sampled_y, sampled_y.sort().values)
+    assert torch.equal(sampled_x, x[sampled_y])
+    for size in (1, 4, 15):
+        other_x, other_y = sample(size, 7)
+        assert torch.equal(other_x, sampled_x)
+        assert torch.equal(other_y, sampled_y)
+    assert not torch.equal(sample(4, 8)[1], sampled_y)
+    assert random.getstate() == random_state
+    assert torch.equal(torch.random.get_rng_state(), torch_state)
+
+
+@pytest.mark.parametrize("vectorize", [True, False])
+def test_capped_evaluator_loss_ignores_batch_boundaries(vectorize):
+    x = torch.arange(1, 16, dtype=torch.float32).reshape(-1, 1)
+    y = torch.zeros_like(x)
+    model = nn.Linear(1, 1, bias=False)
+    selected = subsample([(x, y)], 7, seed=7)[0][0]
+    expected = torch.tensor([4., 9.], dtype=torch.float64) * selected.square().double().mean()
+    for size in (1, 4, 15):
+        batches = [(x[:0], y[:0])]
+        batches += [(x[i:i + size], y[i:i + size]) for i in range(0, len(y), size)]
+        evaluator = Evaluator(model, nn.MSELoss(), iter(batches), max_examples=7, seed=7)
+        assert evaluator.n == 7
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            actual = evaluator.losses(torch.tensor([[2.], [3.]]), vectorize=vectorize)
+        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(evaluator.losses(torch.tensor([[2.], [3.]])), actual)
+
+
+@pytest.mark.parametrize("limit", [3, 10])
+def test_evaluator_cap_keeps_smaller_datasets(limit):
+    x = torch.arange(3, dtype=torch.float32).reshape(-1, 1)
+    evaluator = Evaluator(nn.Linear(1, 1), nn.MSELoss(), [(x, x)], max_examples=limit)
+    assert evaluator.n == 3
+    assert torch.equal(evaluator.batches[0][0], x)
+
+
+@pytest.mark.parametrize("n", [0, -1, 1.5, True])
+def test_subsample_and_evaluator_reject_invalid_counts(n):
+    x = torch.ones(2, 1)
+    with pytest.raises(ValueError, match="n must be a positive integer"):
+        subsample([(x, x)], n, seed=0)
+    with pytest.raises(ValueError, match="max_examples must be a positive integer"):
+        Evaluator(nn.Linear(1, 1), nn.MSELoss(), [(x, x)], max_examples=n)
+
+
+def test_subsample_rejects_insufficient_data_and_mismatched_batches():
+    x = torch.ones(2, 1)
+    with pytest.raises(ValueError, match="requested 3 examples, but loader yielded 2"):
+        subsample([(x, x)], 3)
+    with pytest.raises(ValueError, match="requested 1 examples, but loader yielded 0"):
+        subsample([], 1)
+    with pytest.raises(ValueError, match="same batch length"):
+        subsample([(x, x[:1])], 1)
