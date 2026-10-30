@@ -66,7 +66,8 @@ class Evaluator:
 
     `loss_fn(output, target)` and optional `metric_fn(output, target)` must
     return scalar tensors containing means over the batch. Empty batches
-    are skipped; a loader with no examples is rejected. `max_examples` caps
+    are skipped; input and target batch lengths must match, and a loader
+    with no examples is rejected. `max_examples` caps
     the cached dataset using `subsample` and `seed` (default 0).
     """
 
@@ -94,6 +95,8 @@ class Evaluator:
         self.batches = list(loader)
         if not self.batches:
             raise ValueError("loader yielded no batches")
+        if any(len(x) != len(y) for x, y in self.batches):
+            raise ValueError("inputs and targets must have the same batch length")
         self.batches = [(x, y) for x, y in self.batches if len(y) > 0]
         if not self.batches:
             raise ValueError("loader yielded no examples")

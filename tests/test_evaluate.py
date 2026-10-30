@@ -141,6 +141,23 @@ def test_loader_with_only_empty_batches_is_rejected():
         Evaluator(model, nn.MSELoss(), loader)
 
 
+@pytest.mark.parametrize("max_examples", [None, 1])
+@pytest.mark.parametrize("input_count,target_count", [(2, 1), (1, 2), (1, 0), (0, 1)])
+def test_evaluator_rejects_mismatched_batches_before_filtering(
+    max_examples, input_count, target_count,
+):
+    model = nn.Linear(1, 1, bias=False)
+    x = torch.tensor([[1.], [3.]])
+    y = torch.zeros_like(x)
+    batches = [(x, y), (x[:input_count], y[:target_count])]
+
+    def loss_fn(output, target):
+        return (output - target).square().mean()
+
+    with pytest.raises(ValueError, match="inputs and targets must have the same batch length"):
+        Evaluator(model, loss_fn, iter(batches), max_examples=max_examples)
+
+
 def test_subsample_is_seeded_ordered_and_independent_of_batch_boundaries():
     x = torch.arange(30).reshape(15, 2)
     y = torch.arange(15)
