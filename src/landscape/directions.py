@@ -7,7 +7,7 @@ so that a step of size alpha means the same relative change in every layer
 regardless of how the network is parametrized.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 from torch import nn
@@ -89,3 +89,72 @@ def random_direction(
         gen.manual_seed(seed)
     raw = [torch.randn(p.shape, generator=gen, dtype=p.dtype).to(p.device) for p in params]
     return normalize_direction(raw, params, bias_bn)
+
+
+def direction_between(
+    state_a: Mapping[str, torch.Tensor],
+    state_b: Mapping[str, torch.Tensor],
+    model: nn.Module,
+) -> list[torch.Tensor]:
+    """Return b - a, filter-normalized to the model's current weights.
+
+    Buffers are ignored, tied parameters appear once, and biases/BN are zeroed.
+    Unchanged filters stay zero. Neither checkpoint nor the model is modified.
+    """
+    params = list(model.named_parameters())
+    states = []
+    for label, state in (("state_a", state_a), ("state_b", state_b)):
+        for name, _ in params:
+            if name not in state:
+                raise ValueError(f"{label} checkpoint is missing parameter {name!r}")
+        tensors = [state[name] for name, _ in params]
+        check_direction(model, tensors)
+        states.append([t.detach().to(p.device) for t, (_, p) in zip(tensors, params)])
+    raw = [b - a for a, b in zip(*states)]
+    return normalize_direction(raw, [p for _, p in params])
+
+
+def _orthogonal_component(direction, against):
+    if len(direction) != len(against):
+        raise ValueError("direction and against have different lengths")
+    for i, (d, a) in enumerate(zip(direction, against)):
+        if d.shape != a.shape or d.dtype != a.dtype or d.device != a.device:
+            raise ValueError(f"direction and against tensor {i} must match shape, dtype and device")
+    if not direction:
+        return []
+    d = torch.cat([t.detach().reshape(-1) for t in direction])
+    a = torch.cat([t.detach().reshape(-1) for t in against])
+    if not d.is_floating_point() or not torch.isfinite(d).all() or not torch.isfinite(a).all():
+        raise ValueError("directions must contain finite floating-point values")
+    # Scale first so the reference norm cannot overflow or underflow.
+    unit = a / a.abs().max() if torch.count_nonzero(a) else torch.zeros_like(a)
+    if torch.count_nonzero(unit):
+        unit = unit / unit.norm()
+    residual = d - torch.dot(d, unit) * unit
+    if residual.norm() <= 4 * torch.finfo(d.dtype).eps * d.norm():
+        residual = torch.zeros_like(d)
+    return [r.reshape(t.shape) for r, t in zip(residual.split([t.numel() for t in direction]), direction)]
+
+
+def orthogonalize(
+    direction: Sequence[torch.Tensor], against: Sequence[torch.Tensor],
+) -> list[torch.Tensor]:
+    """Project off `against` in flat space, then restore `direction` filter norms.
+
+    Per-filter rescaling can destroy flat orthogonality. Scalars and 1D tensors
+    are each treated as one filter. Collapsed filters (including parallel
+    directions within floating-point tolerance) stay zero; a zero `against`
+    leaves the direction unchanged. Inputs are never modified.
+    """
+    residual = _orthogonal_component(direction, against)
+    if not any(torch.count_nonzero(t) for t in against):
+        return [t.detach().clone() for t in direction]
+    out = []
+    for raw, original in zip(residual, direction):
+        rows = raw.reshape(raw.shape[0], -1) if raw.dim() > 1 else raw.reshape(1, -1)
+        target = original.detach().reshape(rows.shape).norm(dim=1, keepdim=True)
+        norm = rows.norm(dim=1, keepdim=True)
+        collapsed = norm <= 4 * torch.finfo(raw.dtype).eps * target
+        scale = target / norm.masked_fill(collapsed, 1)
+        out.append((rows * scale).masked_fill(collapsed, 0).reshape(original.shape))
+    return out

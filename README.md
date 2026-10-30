@@ -54,6 +54,10 @@ ls.plot_curve(curve).figure.savefig("path.png")
   `plot_curve` draws metrics as dashed lines on a separate right-hand scale.
 - Between two checkpoints only parameters are interpolated. BatchNorm running
   statistics stay whatever `model` currently holds.
+- `ls.direction_between(start, end, model)` normalizes checkpoint differences
+  to the model's filter norms. `ls.orthogonalize(dy, dx)` removes the flat
+  projection onto `dx`, then restores `dy`'s filter norms; that rescaling can
+  change the final dot product. Unchanged or collapsed filters stay zero.
 
 Needs Python 3.11+, torch, numpy and matplotlib 3.9+ (older matplotlib builds
 do not import under numpy 2).
