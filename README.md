@@ -46,6 +46,11 @@ ls.plot_curve(curve).figure.savefig("path.png")
   the same input order. The helper rejects `n` larger than the dataset.
 - 2D grids are evaluated with `torch.func.vmap` in chunks; if the model or loss
   cannot be vmapped it falls back to a per-point loop with a warning.
+- Pass `metric_fn=ls.accuracy` to either curve helper, `plane_slice`, or
+  `Evaluator` to also measure top-1 accuracy from `(N, C)` class scores and
+  `(N,)` class labels. Slice results store a matching `.metric` array;
+  `Evaluator.evaluate(thetas)` returns `(losses, metrics)`. Custom metrics
+  must return a scalar tensor with the batch mean; without one, metrics is `None`.
 - Between two checkpoints only parameters are interpolated. BatchNorm running
   statistics stay whatever `model` currently holds.
 

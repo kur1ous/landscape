@@ -13,6 +13,15 @@ from torch.func import functional_call, vmap
 LossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+def accuracy(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Mean top-1 accuracy for scores (N, C) and integer class labels (N,)."""
+    if output.ndim != 2 or target.ndim != 1 or output.shape[0] != target.shape[0]:
+        raise ValueError("accuracy expects scores (N, C) and class labels (N,)")
+    if output.shape[0] == 0 or output.shape[1] == 0:
+        raise ValueError("accuracy needs at least one example and one class")
+    return (output.argmax(dim=1) == target).float().mean()
+
+
 def flatten(tensors: Sequence[torch.Tensor]) -> torch.Tensor:
     return torch.cat([t.detach().reshape(-1) for t in tensors])
 
@@ -55,7 +64,8 @@ class Evaluator:
     model is evaluated in eval mode (BatchNorm uses running statistics,
     dropout is off) and is put back exactly as it was afterwards.
 
-    `loss_fn(output, target)` must return a mean over the batch. Empty batches
+    `loss_fn(output, target)` and optional `metric_fn(output, target)` must
+    return scalar tensors containing means over the batch. Empty batches
     are skipped; a loader with no examples is rejected. `max_examples` caps
     the cached dataset using `subsample` and `seed` (default 0).
     """
@@ -69,6 +79,7 @@ class Evaluator:
         *,
         max_examples: int | None = None,
         seed: int = 0,
+        metric_fn: LossFn | None = None,
     ):
         if max_examples is not None and (
             isinstance(max_examples, bool) or not isinstance(max_examples, int) or max_examples <= 0
@@ -76,6 +87,8 @@ class Evaluator:
             raise ValueError("max_examples must be a positive integer")
         self.model = model
         self.loss_fn = loss_fn
+        self.metric_fn = metric_fn
+        self._functions = (loss_fn,) if metric_fn is None else (loss_fn, metric_fn)
         self.params = list(model.parameters())
         self.device = torch.device(device) if device else self.params[0].device
         self.batches = list(loader)
@@ -115,16 +128,18 @@ class Evaluator:
             p.copy_(theta[offset : offset + k].view_as(p))
             offset += k
 
-    def _loss_here(self) -> float:
-        total = 0.0
+    def _evaluate_here(self) -> tuple[float, ...]:
+        totals = [0.0] * len(self._functions)
         for x, y in self.batches:
-            total += self.loss_fn(self.model(x), y).item() * len(y)
-        return total / self.n
+            output = self.model(x)
+            for i, fn in enumerate(self._functions):
+                totals[i] += fn(output, y).item() * len(y)
+        return tuple(total / self.n for total in totals)
 
     def loss(self, theta: torch.Tensor) -> float:
         return float(self.losses(theta.unsqueeze(0))[0])
 
-    def _losses_vmapped(self, thetas: torch.Tensor) -> torch.Tensor:
+    def _evaluate_vmapped(self, thetas: torch.Tensor) -> tuple[torch.Tensor, ...]:
         names = [n for n, _ in self.model.named_parameters()]
         shapes = [p.shape for p in self.params]
         sizes = [p.numel() for p in self.params]
@@ -132,20 +147,32 @@ class Evaluator:
 
         def one(theta, x, y):
             params = {n: t.view(s) for n, t, s in zip(names, theta.split(sizes), shapes)}
-            return self.loss_fn(functional_call(self.model, (params, buffers), (x,)), y)
+            output = functional_call(self.model, (params, buffers), (x,))
+            return tuple(fn(output, y) for fn in self._functions)
 
         batched = vmap(one, in_dims=(0, None, None))
-        total = torch.zeros(len(thetas), dtype=torch.float64)
+        totals = tuple(torch.zeros(len(thetas), dtype=torch.float64) for _ in self._functions)
         for x, y in self.batches:
-            total += batched(thetas, x, y).double().cpu() * len(y)
-        return total / self.n
+            for total, values in zip(totals, batched(thetas, x, y)):
+                total += values.double().cpu() * len(y)
+        return tuple(total / self.n for total in totals)
 
     def losses(self, thetas: torch.Tensor, vectorize: bool = True) -> torch.Tensor:
-        """Loss at each row of `thetas`, shape (points, n_weights).
+        """Loss at each row of `thetas`; see `evaluate` for vectorization."""
+        return self.evaluate(thetas, vectorize=vectorize)[0]
+
+    def evaluate(
+        self, thetas: torch.Tensor, vectorize: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Return (losses, metrics) at rows of `thetas`, shape (points, n_weights).
+
+        Results are CPU float64 tensors of shape (points,); metrics is None
+        without `metric_fn`. Both means are weighted by batch size and share
+        each forward pass.
 
         With vectorize=True all rows go through the model at once via vmap, so
         the cost in memory is (points x activations); pass smaller blocks for
-        big models. A loss or model that vmap cannot trace falls back to the
+        big models. A callback or model that vmap cannot trace falls back to the
         plain per-point loop with a warning.
         """
         thetas = thetas.to(self.device)
@@ -154,11 +181,13 @@ class Evaluator:
         with self._eval_state():
             if vectorize:
                 try:
-                    return self._losses_vmapped(thetas)
+                    values = self._evaluate_vmapped(thetas)
+                    return values[0], values[1] if self.metric_fn is not None else None
                 except (RuntimeError, ValueError, TypeError) as err:
                     warnings.warn(f"vmap failed ({err}); evaluating point by point", RuntimeWarning)
-            out = torch.empty(len(thetas), dtype=torch.float64)
+            out = tuple(torch.empty(len(thetas), dtype=torch.float64) for _ in self._functions)
             for i, theta in enumerate(thetas):
                 self._assign(theta)
-                out[i] = self._loss_here()
-            return out
+                for values, value in zip(out, self._evaluate_here()):
+                    values[i] = value
+            return out[0], out[1] if self.metric_fn is not None else None

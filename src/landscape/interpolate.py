@@ -18,6 +18,7 @@ class Curve:
     marks: tuple[float, ...] = (0.0,)  # alphas that correspond to real weights
     mark_labels: tuple[str, ...] = ()
     xlabel: str = "α"
+    metric: np.ndarray | None = None
 
 
 def _alphas(span: tuple[float, float], steps: int) -> np.ndarray:
@@ -33,14 +34,17 @@ def along_direction(
     direction,
     span: tuple[float, float] = (-1.0, 1.0),
     steps: int = 51,
+    *,
+    metric_fn: LossFn | None = None,
 ) -> Curve:
     """Loss of theta + alpha * direction, with theta the model's current weights."""
     check_direction(model, direction)
-    ev = Evaluator(model, loss_fn, loader)
+    ev = Evaluator(model, loss_fn, loader, metric_fn=metric_fn)
     alphas = _alphas(span, steps)
     d = flatten(direction).to(ev.device)
     thetas = ev.theta0[None, :] + torch.as_tensor(alphas, dtype=d.dtype)[:, None] * d[None, :]
-    return Curve(alphas, ev.losses(thetas).numpy())
+    losses, metric = ev.evaluate(thetas)
+    return Curve(alphas, losses.numpy(), metric=None if metric is None else metric.numpy())
 
 
 def between_checkpoints(
@@ -51,6 +55,8 @@ def between_checkpoints(
     end: Mapping[str, torch.Tensor],
     span: tuple[float, float] = (0.0, 1.0),
     steps: int = 51,
+    *,
+    metric_fn: LossFn | None = None,
 ) -> Curve:
     """Loss of (1 - alpha) * start + alpha * end for two state dicts.
 
@@ -68,16 +74,18 @@ def between_checkpoints(
                     f"{label} checkpoint parameter {name!r} has shape "
                     f"{tuple(state[name].shape)}; expected {tuple(param.shape)}"
                 )
-    ev = Evaluator(model, loss_fn, loader)
+    ev = Evaluator(model, loss_fn, loader, metric_fn=metric_fn)
     names = [n for n, _ in params]
     a = flatten([start[n] for n in names]).to(ev.device)
     b = flatten([end[n] for n in names]).to(ev.device)
     alphas = torch.as_tensor(_alphas(span, steps), dtype=a.dtype)[:, None]
     thetas = (1 - alphas) * a[None, :] + alphas * b[None, :]
+    losses, metric = ev.evaluate(thetas)
     return Curve(
         alphas.squeeze(1).numpy(),
-        ev.losses(thetas).numpy(),
+        losses.numpy(),
         marks=(0.0, 1.0),
         mark_labels=("start", "end"),
         xlabel="interpolation coefficient α",
+        metric=None if metric is None else metric.numpy(),
     )
