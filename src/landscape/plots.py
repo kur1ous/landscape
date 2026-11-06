@@ -56,7 +56,8 @@ def _nice_levels(vmin, vmax, n):
     # log-spaced above the minimum: basins are steep, so linear levels
     # would put one line at the bottom and a crowd at the rim
     raw = vmin + (vmax - vmin) * np.geomspace(0.01, 1, n)
-    return np.concatenate([[vmin], np.unique([float(f"{v:.2g}") for v in raw])])
+    # Round labels, not levels: narrow ranges can round below the minimum.
+    return np.unique(np.concatenate([[vmin], raw]))
 
 
 def _label_colors(levels, cmap, vmin, vmax):

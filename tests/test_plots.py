@@ -3,7 +3,30 @@ import numpy as np
 import pytest
 from matplotlib.colors import to_rgba
 
-from landscape import Curve, plot_curve, style
+from landscape import Curve, Surface, plot_curve, plot_surface, style
+
+
+@pytest.mark.parametrize("base", [1.0, 1.001, -1.004, 1000.001])
+@pytest.mark.parametrize("clip", [False, True])
+def test_surface_with_narrow_loss_range_draws_and_saves(base, clip, tmp_path):
+    losses = base + np.array([[0.0, 0.001], [0.002, 0.003]])
+    surface = Surface(np.arange(2), np.arange(2), losses)
+    vmax = base + 0.002 if clip else None
+    expected_max = vmax if clip else np.percentile(losses, 97)
+    fig, ax = plt.subplots()
+    try:
+        assert plot_surface(surface, vmax=vmax, ax=ax) is ax
+        filled, lines = ax.collections[:2]
+        assert np.all(np.diff(filled.levels) > 0)
+        assert filled.levels[0] == losses.min()
+        assert filled.levels[-1] == pytest.approx(expected_max)
+        assert np.any((lines.levels > losses.min()) & (lines.levels < expected_max))
+        assert any(path.vertices.size for path in lines.get_paths())
+        output = tmp_path / "narrow-surface.png"
+        fig.savefig(output)
+        assert output.stat().st_size > 1000
+    finally:
+        plt.close(fig)
 
 
 @pytest.mark.parametrize("logy", [False, True])
